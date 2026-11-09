@@ -65,3 +65,42 @@ jobs:
           find . -mindepth 1 -maxdepth 1 \
             ! -name ".github" \
             -exec rm -rf -- {} +
+            name: Build Gf Drps APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # The audio engine is plain Java, so it is tested on the CI machine before the APK is built.
+      - name: Audio engine self-test
+        run: |
+          mkdir -p out
+          javac -d out app/src/main/java/com/gfdrps/core/*.java test/SelfTest.java test/FixTest.java
+          java -cp out SelfTest
+          java -cp out FixTest
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GfDrps-debug-apk
+          path: app/build/outputs/apk/debug/GFDrps-debug.apk
+          if-no-files-found: error
+
