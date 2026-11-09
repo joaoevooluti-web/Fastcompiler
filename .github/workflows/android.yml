@@ -5,16 +5,6 @@ on:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
-    inputs:
-      extract_zip:
-        description: "Extrair um ZIP da pasta raiz antes do build?"
-        type: boolean
-        required: true
-        default: false
-      zip_name:
-        description: "Nome do ZIP na pasta raiz (ex.: arquivos.zip)"
-        type: string
-        required: false
 
 jobs:
   build:
@@ -23,88 +13,101 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extrair ZIP da pasta raiz
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.extract_zip }}
-        env:
-          ZIP_NAME: ${{ inputs.zip_name }}
+      - name: Extrair ZIPs da raiz
+        shell: bash
         run: |
-          if [ -z "$ZIP_NAME" ]; then
-            echo "Informe o nome do ZIP em zip_name."
+          shopt -s nullglob
+          zips=( *.zip )
+
+          if [ "${#zips[@]}" -eq 0 ]; then
+            echo "Nenhum ZIP encontrado na raiz."
+          else
+            for zip_file in "${zips[@]}"; do
+              echo "Extraindo: $zip_file"
+              unzip -o "$zip_file" -d .
+            done
+          fi
+
+      - name: Localizar projeto
+        shell: bash
+        run: |
+          gradlew_path="$(find . -type f -name gradlew -print -quit)"
+
+          if [ -z "$gradlew_path" ]; then
+            echo "Não foi encontrado o arquivo gradlew."
+            echo "Conteúdo do repositório:"
+            find . -maxdepth 5 -type f | sort | head -300
             exit 1
           fi
 
-          if [ ! -f "$ZIP_NAME" ]; then
-            echo "ZIP não encontrado na pasta raiz: $ZIP_NAME"
-            exit 1
-          fi
+          project_dir="$(dirname "$gradlew_path")"
+          project_dir="${project_dir#./}"
 
-          unzip -o "$ZIP_NAME" -d .
-
-      - name: Conferir arquivos do projeto
-        run: |
-          echo "Diretório atual:"
-          pwd
-          echo "Arquivos Java encontrados:"
-          find . -type f -name '*.java' | sort
+          echo "PROJECT_DIR=$project_dir" >> "$GITHUB_ENV"
+          echo "Projeto encontrado em: $project_dir"
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      # Localiza os arquivos do mecanismo de áudio, mesmo se estiverem
-      # dentro de uma pasta adicional criada pela estrutura do ZIP.
       - name: Audio engine self-test
         shell: bash
         run: |
           mapfile -t CORE_FILES < <(
-            find . -type f \
+            find "$PROJECT_DIR" -type f \
               -path '*/app/src/main/java/com/gfdrps/core/*.java' \
-              ! -path './out/*' \
               | sort
           )
 
-          TEST_FILES=()
-
-          for test_file in test/SelfTest.java test/FixTest.java; do
-            if [ -f "$test_file" ]; then
-              TEST_FILES+=("$test_file")
-            else
-              echo "Arquivo de teste não encontrado: $test_file"
-              exit 1
-            fi
-          done
+          self_test="$(find "$PROJECT_DIR" -type f -name SelfTest.java -print -quit)"
+          fix_test="$(find "$PROJECT_DIR" -type f -name FixTest.java -print -quit)"
 
           if [ "${#CORE_FILES[@]}" -eq 0 ]; then
-            echo "Nenhum arquivo Java encontrado em */app/src/main/java/com/gfdrps/core/"
-            echo "Arquivos Java disponíveis:"
-            find . -type f -name '*.java' | sort
+            echo "Não foram encontrados arquivos Java em app/src/main/java/com/gfdrps/core/."
+            find "$PROJECT_DIR" -type f -name '*.java' | sort
             exit 1
           fi
 
-          mkdir -p out
-          javac -d out "${CORE_FILES[@]}" "${TEST_FILES[@]}"
-          java -cp out SelfTest
-          java -cp out FixTest
+          if [ -z "$self_test" ] || [ -z "$fix_test" ]; then
+            echo "SelfTest.java ou FixTest.java não foi encontrado."
+            find "$PROJECT_DIR" -type f -name '*.java' | sort
+            exit 1
+          fi
+
+          mkdir -p "$PROJECT_DIR/out"
+          javac -d "$PROJECT_DIR/out" \
+            "${CORE_FILES[@]}" \
+            "$self_test" \
+            "$fix_test"
+
+          java -cp "$PROJECT_DIR/out" SelfTest
+          java -cp "$PROJECT_DIR/out" FixTest
 
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
-        run: ./gradlew --no-daemon assembleDebug
+        run: |
+          chmod +x "$PROJECT_DIR/gradlew"
+          "$PROJECT_DIR/gradlew" --no-daemon -p "$PROJECT_DIR" assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: GfDrps-debug-apk
-          path: app/build/outputs/apk/debug/GFDrps-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/GFDrps-debug.apk
           if-no-files-found: error
 
-      - name: Remover ZIP
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.extract_zip }}
-        env:
-          ZIP_NAME: ${{ inputs.zip_name }}
+      - name: Remover ZIPs da raiz
+        if: always()
+        shell: bash
         run: |
-          if [ -n "$ZIP_NAME" ] && [ -f "$ZIP_NAME" ]; then
-            rm -f -- "$ZIP_NAME"
-            echo "ZIP removido: $ZIP_NAME"
+          shopt -s nullglob
+          zips=( *.zip )
+
+          if [ "${#zips[@]}" -gt 0 ]; then
+            rm -f -- "${zips[@]}"
+            echo "ZIPs da raiz removidos."
+          else
+            echo "Não há ZIPs para remover."
           fi
