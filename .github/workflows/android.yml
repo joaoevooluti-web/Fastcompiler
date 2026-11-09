@@ -1,77 +1,20 @@
-name: Compilar app Android
+name: Build Gf Drps APK
 
 on:
   push:
-    branches:
-      - main
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Baixar código da main
-        uses: actions/checkout@v4
-
-      - name: Conferir ZIP e limpar a raiz, preservando .github
-        id: zip
-        shell: bash
-        run: |
-          shopt -s nullglob
-          zips=( *.zip )
-
-          if [ "${#zips[@]}" -ne 1 ]; then
-            echo "Esperado exatamente um arquivo .zip na raiz; encontrados: ${#zips[@]}."
-            exit 1
-          fi
-
-          zip_file="${zips[0]}"
-          echo "file=$zip_file" >> "$GITHUB_OUTPUT"
-
-          find . -mindepth 1 -maxdepth 1 \
-            ! -name ".github" \
-            ! -name "$zip_file" \
-            -exec rm -rf -- {} +
-
-      - name: Configurar Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Extrair ZIP
-        run: unzip -o "${{ steps.zip.outputs.file }}" -d .
-
-      - name: Compilar APK
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug
-
-      - name: Disponibilizar APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug
-          path: "**/build/outputs/apk/debug/*.apk"
-          if-no-files-found: error
-
-      - name: Limpar a raiz, preservando .github
-        if: always()
-        shell: bash
-        run: |
-          find . -mindepth 1 -maxdepth 1 \
-            ! -name ".github" \
-            -exec rm -rf -- {} +
-            name: Build Gf Drps APK
-
-on:
-  push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      extract_zip:
+        description: "Extrair um ZIP da pasta raiz antes do build?"
+        type: boolean
+        required: true
+        default: false
+      zip_name:
+        description: "Nome do ZIP na pasta raiz (ex.: arquivos.zip)"
+        type: string
+        required: false
 
 jobs:
   build:
@@ -79,12 +22,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extrair ZIP da pasta raiz
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.extract_zip }}
+        env:
+          ZIP_NAME: ${{ inputs.zip_name }}
+        run: |
+          if [ -z "$ZIP_NAME" ]; then
+            echo "Informe o nome do ZIP em zip_name."
+            exit 1
+          fi
+
+          if [ ! -f "$ZIP_NAME" ]; then
+            echo "ZIP não encontrado na pasta raiz: $ZIP_NAME"
+            exit 1
+          fi
+
+          unzip -o "$ZIP_NAME" -d .
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      # The audio engine is plain Java, so it is tested on the CI machine before the APK is built.
+      # O mecanismo de áudio é Java puro, então é testado antes de construir o APK.
       - name: Audio engine self-test
         run: |
           mkdir -p out
@@ -104,3 +64,11 @@ jobs:
           path: app/build/outputs/apk/debug/GFDrps-debug.apk
           if-no-files-found: error
 
+      - name: Remover ZIP
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.extract_zip }}
+        env:
+          ZIP_NAME: ${{ inputs.zip_name }}
+        run: |
+          if [ -n "$ZIP_NAME" ] && [ -f "$ZIP_NAME" ]; then
+            rm -f -- "$ZIP_NAME"
+          fi
