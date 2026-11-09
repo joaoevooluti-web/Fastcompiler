@@ -19,6 +19,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -39,16 +40,50 @@ jobs:
 
           unzip -o "$ZIP_NAME" -d .
 
+      - name: Conferir arquivos do projeto
+        run: |
+          echo "Diretório atual:"
+          pwd
+          echo "Arquivos Java encontrados:"
+          find . -type f -name '*.java' | sort
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      # O mecanismo de áudio é Java puro, então é testado antes de construir o APK.
+      # Localiza os arquivos do mecanismo de áudio, mesmo se estiverem
+      # dentro de uma pasta adicional criada pela estrutura do ZIP.
       - name: Audio engine self-test
+        shell: bash
         run: |
+          mapfile -t CORE_FILES < <(
+            find . -type f \
+              -path '*/app/src/main/java/com/gfdrps/core/*.java' \
+              ! -path './out/*' \
+              | sort
+          )
+
+          TEST_FILES=()
+
+          for test_file in test/SelfTest.java test/FixTest.java; do
+            if [ -f "$test_file" ]; then
+              TEST_FILES+=("$test_file")
+            else
+              echo "Arquivo de teste não encontrado: $test_file"
+              exit 1
+            fi
+          done
+
+          if [ "${#CORE_FILES[@]}" -eq 0 ]; then
+            echo "Nenhum arquivo Java encontrado em */app/src/main/java/com/gfdrps/core/"
+            echo "Arquivos Java disponíveis:"
+            find . -type f -name '*.java' | sort
+            exit 1
+          fi
+
           mkdir -p out
-          javac -d out app/src/main/java/com/gfdrps/core/*.java test/SelfTest.java test/FixTest.java
+          javac -d out "${CORE_FILES[@]}" "${TEST_FILES[@]}"
           java -cp out SelfTest
           java -cp out FixTest
 
@@ -71,4 +106,5 @@ jobs:
         run: |
           if [ -n "$ZIP_NAME" ] && [ -f "$ZIP_NAME" ]; then
             rm -f -- "$ZIP_NAME"
+            echo "ZIP removido: $ZIP_NAME"
           fi
