@@ -1,0 +1,67 @@
+name: Compilar app Android
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código da main
+        uses: actions/checkout@v4
+
+      - name: Conferir ZIP e limpar a raiz, preservando .github
+        id: zip
+        shell: bash
+        run: |
+          shopt -s nullglob
+          zips=( *.zip )
+
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "Esperado exatamente um arquivo .zip na raiz; encontrados: ${#zips[@]}."
+            exit 1
+          fi
+
+          zip_file="${zips[0]}"
+          echo "file=$zip_file" >> "$GITHUB_OUTPUT"
+
+          find . -mindepth 1 -maxdepth 1 \
+            ! -name ".github" \
+            ! -name "$zip_file" \
+            -exec rm -rf -- {} +
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Extrair ZIP
+        run: unzip -o "${{ steps.zip.outputs.file }}" -d .
+
+      - name: Compilar APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      - name: Disponibilizar APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: "**/build/outputs/apk/debug/*.apk"
+          if-no-files-found: error
+
+      - name: Limpar a raiz, preservando .github
+        if: always()
+        shell: bash
+        run: |
+          find . -mindepth 1 -maxdepth 1 \
+            ! -name ".github" \
+            -exec rm -rf -- {} +
